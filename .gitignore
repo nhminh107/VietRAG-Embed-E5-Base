@@ -1,0 +1,61 @@
+/.venv
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.idea/
+.vscode/
+
+# Environment variables / secrets
+.env
+.env.*
+*.key
+*.pem
+
+# Model checkpoints / training outputs
+checkpoints/
+outputs/
+output/
+runs/
+logs/
+wandb/
+
+# Model files
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+
+# Dataset / generated data
+data/
+datasets/
+*.parquet
+*.csv
+*.jsonl
+
+# Vector indexes / database
+*.faiss
+*.index
+*.db
+*.sqlite
+*.sqlite3
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.log

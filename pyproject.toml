@@ -1,0 +1,8 @@
+[project]
+name="VietRAG-Embed-E5-Base"
+version="0.1"
+dependencies = [
+    "transformers",
+    "pandas",
+    "pydantic"
+]
