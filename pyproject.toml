@@ -7,4 +7,5 @@ dependencies = [
     "pydantic",
     "datasets==3.6.0",
     "seacrowd>=0.2.2",
+    "ipykernel>=7.3.0",
 ]

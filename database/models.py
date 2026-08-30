@@ -2,9 +2,9 @@ from pydantic import BaseModel
 
 class GeneralModel(BaseModel):
     data_id: str
-    source: str
-    title: str
-    topic: str
+    source: str | None = None
+    title: str | None = None
+    topic: str | None = None
     anchor: str
-    positive: str
-    hard_negative: str
+    positive: str| None = None
+    hard_negative: str | None = None
