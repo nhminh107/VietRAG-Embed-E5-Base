@@ -1,6 +1,7 @@
 [project]
 name="VietRAG-Embed-E5-Base"
 version="0.1"
+base_model="multilingal-e5-base"
 dependencies = [
     "transformers",
     "pandas",

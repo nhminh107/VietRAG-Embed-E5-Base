@@ -4,6 +4,14 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 class Base(DeclarativeBase):
     pass
 
+class Data(Base):
+    __tablename__ = "data"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    anchor: Mapped[str] = mapped_column(Text, nullable=False)
+    positive: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hard_negative: Mapped[str | None] = mapped_column(Text, nullable=True)
+
 class GeneralModel(Base):
     __tablename__ = "general"
 
