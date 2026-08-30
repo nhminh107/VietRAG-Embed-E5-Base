@@ -8,4 +8,7 @@ dependencies = [
     "datasets==3.6.0",
     "seacrowd>=0.2.2",
     "ipykernel>=7.3.0",
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.2",
+    "python-dotenv>=1.0",
 ]
