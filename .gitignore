@@ -39,7 +39,7 @@ wandb/
 
 # Dataset / generated data
 data/
-datasets/
+data/
 *.parquet
 *.csv
 *.jsonl
