@@ -44,3 +44,15 @@ class LegalModel(Base):
     anchor: Mapped[str] = mapped_column(Text, nullable=False)
     positive: Mapped[str | None] = mapped_column(Text, nullable=True)
     hard_negative: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class FinanceModel(Base):
+    __tablename__ = "finance"
+
+    data_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    topic: Mapped[str | None] = mapped_column(Text, nullable=True)
+    anchor: Mapped[str] = mapped_column(Text, nullable=False)
+    positive: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hard_negative: Mapped[str | None] = mapped_column(Text, nullable=True)

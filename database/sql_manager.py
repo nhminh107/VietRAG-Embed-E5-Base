@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from database.models import GeneralModel, GeneralTriplet, LegalModel
+from database.models import FinanceModel, GeneralModel, GeneralTriplet, LegalModel
 
 class SQL_Manager:
     def __init__(self, database_url: str | None = None):
@@ -35,6 +35,9 @@ class SQL_Manager:
     def create_legal_model(self) -> None:
         LegalModel.__table__.create(self.engine, checkfirst=True)
 
+    def create_finance_model(self) -> None:
+        FinanceModel.__table__.create(self.engine, checkfirst=True)
+
     def create_general_triplet(self) -> None:
         GeneralTriplet.__table__.create(self.engine, checkfirst=True)
 
@@ -57,6 +60,19 @@ class SQL_Manager:
                 data_id=data.data_id,
                 source=data.source,
                 title=data.title,
+                anchor=data.anchor,
+                positive=data.positive,
+                hard_negative=data.hard_negative,
+            )
+        )
+
+    def insert_finance_model(self, data: FinanceModel) -> None:
+        self.con.add(
+            FinanceModel(
+                data_id=data.data_id,
+                source=data.source,
+                title=data.title,
+                topic=data.topic,
                 anchor=data.anchor,
                 positive=data.positive,
                 hard_negative=data.hard_negative,
