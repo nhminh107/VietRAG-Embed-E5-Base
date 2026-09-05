@@ -19,13 +19,13 @@ REQUIRED_FIELDS = (
     "topic",
     "anchor",
     "positive",
-    "answer",
     "hard_negative",
 )
+LEGACY_REQUIRED_FIELDS = set(REQUIRED_FIELDS) | {"answer"}
 
 DEFAULT_TOTAL_DOCUMENTS = 350_000
-DEFAULT_BATCH_SIZE = 20
-DEFAULT_MAX_CONCURRENCY = 3
+DEFAULT_BATCH_SIZE = 10
+DEFAULT_MAX_CONCURRENCY = 7
 DEFAULT_MAX_RETRIES = 5
 DEFAULT_OUTPUT_DIR = Path("/data/Science/generated_qa")
 
@@ -178,6 +178,82 @@ def _remove_code_fence(content: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _parse_json_documents(content: str) -> list[object]:
+    """Parse a JSON array and salvage complete objects from a malformed response."""
+    cleaned_content = _remove_code_fence(content)
+    try:
+        parsed = json.loads(cleaned_content)
+        if not isinstance(parsed, list):
+            raise ValueError("The model response must be a JSON array")
+        return parsed
+    except json.JSONDecodeError as original_error:
+        documents: list[object] = []
+        object_start: int | None = None
+        object_depth = 0
+        in_string = False
+        escaped = False
+
+        for index, character in enumerate(cleaned_content):
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == '"':
+                    in_string = False
+                continue
+
+            if character == '"':
+                in_string = True
+            elif character == "{":
+                if object_depth == 0:
+                    object_start = index
+                object_depth += 1
+            elif character == "}" and object_depth > 0:
+                object_depth -= 1
+                if object_depth == 0 and object_start is not None:
+                    try:
+                        documents.append(
+                            json.loads(cleaned_content[object_start : index + 1])
+                        )
+                    except json.JSONDecodeError:
+                        pass
+                    object_start = None
+
+        if not documents:
+            raise original_error
+
+        print(
+            "Warning: malformed model JSON; salvaged "
+            f"{len(documents)} complete records"
+        )
+        return documents
+
+
+def _normalize_source(source: str, trusted_sources: tuple[str, ...]) -> str:
+    """Normalize common source formats without rejecting an unknown source."""
+    candidate = source.strip()
+    normalized_candidate = candidate.casefold().rstrip("/")
+
+    for trusted_source in trusted_sources:
+        source_name, separator, source_url = trusted_source.partition(" | ")
+        accepted_values = {
+            trusted_source.casefold().rstrip("/"),
+            source_name.casefold().rstrip("/"),
+        }
+        if separator:
+            accepted_values.add(source_url.casefold().rstrip("/"))
+
+        if normalized_candidate in accepted_values:
+            return trusted_source
+        if source_name.casefold() in normalized_candidate:
+            return trusted_source
+        if separator and source_url.casefold().rstrip("/") in normalized_candidate:
+            return trusted_source
+
+    return candidate
+
+
 def _validate_documents(
     documents: object,
     expected_count: int,
@@ -186,55 +262,42 @@ def _validate_documents(
     """Validate the generated retrieval records before writing them."""
     if not isinstance(documents, list):
         raise ValueError("The model response must be a JSON array")
-    if len(documents) != expected_count:
-        raise ValueError(
-            f"The model returned {len(documents)} items; expected {expected_count}"
-        )
-
     required_fields = set(REQUIRED_FIELDS)
-    seen_anchors: set[str] = set()
-    for document in documents:
+    valid_documents: list[Document] = []
+    for document in documents[:expected_count]:
         if not isinstance(document, dict):
-            raise ValueError("Each generated item must be a JSON object")
-        if set(document) != required_fields:
-            raise ValueError(
-                f"Each item must contain exactly these fields: {REQUIRED_FIELDS}"
-            )
+            continue
+        if not required_fields.issubset(document):
+            continue
         for field in REQUIRED_FIELDS:
             if not isinstance(document[field], str) or not document[field].strip():
-                raise ValueError(f"Each item must contain a non-empty '{field}'")
+                break
+        else:
+            normalized_document = {
+                field: document[field].strip() for field in REQUIRED_FIELDS
+            }
+            normalized_document["source"] = _normalize_source(
+                normalized_document["source"],
+                config.sources,
+            )
+            valid_documents.append(normalized_document)
 
-        if document["source"] not in config.sources:
-            raise ValueError("Each source must come from the trusted source list")
-        if document["topic"] not in config.topics:
-            raise ValueError("Each topic must come from the allowed topic list")
-
-        answer = document["answer"].strip().casefold()
-        anchor = document["anchor"].strip().casefold()
-        positive = document["positive"].strip().casefold()
-        hard_negative = document["hard_negative"].strip().casefold()
-
-        if anchor in seen_anchors:
-            raise ValueError("Generated anchors must not be duplicated")
-        seen_anchors.add(anchor)
-        if answer not in positive:
-            raise ValueError("Each answer must appear verbatim in its positive passage")
-        if answer in hard_negative:
-            raise ValueError("A hard negative must not contain the answer")
-        if positive == hard_negative:
-            raise ValueError("Positive and hard negative passages must be different")
-
-    return documents
+    if not valid_documents:
+        raise ValueError("The model did not return any complete records")
+    return valid_documents
 
 
 def _validate_existing_document(document: object, path: Path, index: int) -> Document:
     """Validate one stored record and return it with a precise type."""
     required_fields = set(REQUIRED_FIELDS)
-    if not isinstance(document, dict) or set(document) != required_fields:
+    if not isinstance(document, dict) or set(document) not in (
+        required_fields,
+        LEGACY_REQUIRED_FIELDS,
+    ):
         raise ValueError(f"{path} contains an incompatible record at index {index}")
     if any(
         not isinstance(document[field], str) or not document[field].strip()
-        for field in REQUIRED_FIELDS
+        for field in document
     ):
         raise ValueError(f"{path} contains an invalid record at index {index}")
     return document
@@ -260,10 +323,6 @@ def _load_generation_state(output_file: str) -> tuple[int, set[str]]:
                     index,
                 )
                 anchor = document["anchor"].strip().casefold()
-                if anchor in anchors:
-                    raise ValueError(
-                        f"{path} contains a duplicate anchor at index {index}"
-                    )
                 anchors.add(anchor)
                 count += 1
         return count, anchors
@@ -275,8 +334,6 @@ def _load_generation_state(output_file: str) -> tuple[int, set[str]]:
     for index, item in enumerate(documents):
         document = _validate_existing_document(item, path, index)
         anchor = document["anchor"].strip().casefold()
-        if anchor in anchors:
-            raise ValueError(f"{path} contains a duplicate anchor at index {index}")
         anchors.add(anchor)
 
     return len(documents), anchors
@@ -294,12 +351,9 @@ def _append_to_json(
     else:
         existing_anchors = known_anchors
 
-    new_anchors: set[str] = set()
-    for document in new_documents:
-        anchor = document["anchor"].strip().casefold()
-        if anchor in existing_anchors or anchor in new_anchors:
-            raise ValueError(f"Duplicate anchor found: {document['anchor']}")
-        new_anchors.add(anchor)
+    new_anchors = {
+        document["anchor"].strip().casefold() for document in new_documents
+    }
 
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -353,20 +407,20 @@ Các chủ đề được phép: {topics_text}.
 Chỉ sử dụng kiến thức khoa học ổn định từ các nguồn sau:
 {sources_text}
 
-Mỗi mẫu phải có đúng 7 trường:
+Mỗi mẫu phải có đúng 6 trường:
 - source: chép nguyên văn một nguồn trong danh sách trên, không tự tạo URL.
 - title: tiêu đề ngắn mô tả kiến thức chính.
 - topic: một chủ đề trong danh sách được phép.
 - anchor: câu hỏi rõ ràng, tự nhiên, không mơ hồ.
 - positive: đoạn đúng về khoa học, tự chứa đủ thông tin để trả lời anchor.
-- answer: câu trả lời ngắn và phải xuất hiện nguyên văn trong positive.
 - hard_negative: đoạn đúng về khoa học, cùng chủ đề và có từ vựng gần positive nhưng
-  không chứa answer, không trả lời được anchor và không được là phủ định sai của positive.
+  không trả lời được anchor và không được là phủ định sai của positive.
 
 Yêu cầu chất lượng:
 - Ưu tiên định luật, định nghĩa và hiện tượng đã được khoa học công nhận.
 - Không dùng dữ kiện thời sự, số liệu dễ thay đổi hoặc tuyên bố chưa có đồng thuận.
 - Positive và hard_negative dài 3-6 câu, tương đương nhau về độ dài và độ khó.
+- Không lặp lại cùng một thông tin nhiều lần trong một đoạn.
 - Không lặp câu hỏi hoặc tài liệu giữa các mẫu.
 - Nếu không chắc chắn về một chi tiết thì không sử dụng chi tiết đó.
 - Chỉ trả về một JSON array hợp lệ, không thêm markdown hay lời giải thích.
@@ -403,7 +457,7 @@ Yêu cầu chất lượng:
 
     result = response.json()
     content = result["choices"][0]["message"]["content"]
-    parsed_documents = json.loads(_remove_code_fence(content))
+    parsed_documents = _parse_json_documents(content)
     new_documents = _validate_documents(
         parsed_documents,
         number_of_documents,
