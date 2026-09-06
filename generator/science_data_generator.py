@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -25,13 +26,14 @@ LEGACY_REQUIRED_FIELDS = set(REQUIRED_FIELDS) | {"answer"}
 
 DEFAULT_TOTAL_DOCUMENTS = 350_000
 DEFAULT_BATCH_SIZE = 10
-DEFAULT_MAX_CONCURRENCY = 7
+DEFAULT_MAX_CONCURRENCY = 14
+DEFAULT_WORKERS_PER_DOMAIN = 2
 DEFAULT_MAX_RETRIES = 5
-DEFAULT_OUTPUT_DIR = Path("/data/Science/generated_qa")
+DEFAULT_OUTPUT_DIR = Path("/data/Science/generated_qa_v2")
 
 Document = dict[str, str]
 DocumentGenerator = Callable[
-    [int, str, set[str] | None],
+    [int, str, set[str] | None, int | None],
     Awaitable[list[Document]],
 ]
 
@@ -48,17 +50,28 @@ class DomainConfig:
 PHYSICS = DomainConfig(
     name="vật lí",
     topics=(
-        "cơ học",
-        "nhiệt học",
-        "điện và từ",
-        "quang học",
-        "sóng",
-        "vật lí hiện đại",
+        "động học chất điểm",
+        "động lực học Newton",
+        "cơ học chất lưu",
+        "dao động và sóng",
+        "nhiệt động lực học",
+        "điện trường và điện thế",
+        "mạch điện",
+        "từ trường và cảm ứng điện từ",
+        "quang hình học",
+        "quang học sóng",
+        "thuyết tương đối",
+        "cơ học lượng tử",
+        "vật lí nguyên tử",
+        "vật lí hạt nhân",
     ),
     sources=(
-        "OpenStax University Physics | https://openstax.org/details/books/university-physics-volume-1",
-        "NIST Physical Measurement Laboratory | https://www.nist.gov/pml",
-        "NASA Science | https://science.nasa.gov/",
+        "OpenStax University Physics Volume 2 | https://openstax.org/details/books/university-physics-volume-2",
+        "OpenStax University Physics Volume 3 | https://openstax.org/details/books/university-physics-volume-3",
+        "CERN Physics | https://home.cern/science/physics",
+        "IAEA Nuclear Physics | https://www.iaea.org/topics/nuclear-physics",
+        "Physics LibreTexts | https://phys.libretexts.org/",
+        "American Physical Society | https://www.aps.org/",
     ),
 )
 
@@ -66,16 +79,26 @@ BIOLOGY = DomainConfig(
     name="sinh học",
     topics=(
         "sinh học tế bào",
+        "sinh học phân tử",
         "di truyền học",
+        "hệ gen học",
+        "hóa sinh",
         "sinh thái học",
         "tiến hóa",
+        "thực vật học",
+        "động vật học",
+        "miễn dịch học",
+        "sinh học thần kinh",
         "sinh lí học",
         "vi sinh vật học",
     ),
     sources=(
-        "OpenStax Biology 2e | https://openstax.org/details/books/biology-2e",
-        "NCBI Bookshelf | https://www.ncbi.nlm.nih.gov/books/",
-        "HHMI BioInteractive | https://www.biointeractive.org/",
+        "EMBL-EBI Training | https://www.ebi.ac.uk/training/",
+        "Genome.gov Genomics | https://www.genome.gov/about-genomics",
+        "Nature Scitable | https://www.nature.com/scitable/",
+        "Biology LibreTexts | https://bio.libretexts.org/",
+        "Smithsonian Human Origins | https://humanorigins.si.edu/",
+        "Encyclopedia of Life | https://eol.org/",
     ),
 )
 
@@ -83,16 +106,25 @@ INFORMATION_TECHNOLOGY = DomainConfig(
     name="công nghệ thông tin và khoa học máy tính",
     topics=(
         "cấu trúc dữ liệu và giải thuật",
+        "độ phức tạp tính toán",
         "hệ điều hành",
+        "hệ thống phân tán",
         "mạng máy tính",
+        "giao thức Internet",
         "cơ sở dữ liệu",
+        "hệ quản trị cơ sở dữ liệu",
         "an toàn thông tin",
+        "mật mã học",
         "kiến trúc máy tính",
+        "ngôn ngữ lập trình",
     ),
     sources=(
-        "NIST Computer Security Resource Center | https://csrc.nist.gov/",
-        "IETF RFC Editor | https://www.rfc-editor.org/",
-        "ACM Digital Library | https://dl.acm.org/",
+        "OpenDSA | https://opendsa-server.cs.vt.edu/",
+        "MIT OpenCourseWare Electrical Engineering and Computer Science | https://ocw.mit.edu/search/?d=Electrical%20Engineering%20and%20Computer%20Science",
+        "PostgreSQL Documentation | https://www.postgresql.org/docs/",
+        "Linux Kernel Documentation | https://docs.kernel.org/",
+        "OWASP | https://owasp.org/",
+        "MDN Web Docs | https://developer.mozilla.org/",
     ),
 )
 
@@ -100,16 +132,25 @@ CHEMISTRY = DomainConfig(
     name="hóa học",
     topics=(
         "cấu tạo nguyên tử",
+        "bảng tuần hoàn",
         "liên kết hóa học",
+        "hóa học dung dịch",
+        "hóa học axit-bazơ",
         "nhiệt động hóa học",
         "động học hóa học",
         "cân bằng hóa học",
         "hóa học hữu cơ",
+        "hóa học vô cơ",
+        "hóa phân tích",
+        "hóa sinh",
     ),
     sources=(
-        "OpenStax Chemistry 2e | https://openstax.org/details/books/chemistry-2e",
-        "IUPAC Gold Book | https://goldbook.iupac.org/",
-        "NIST Chemistry WebBook | https://webbook.nist.gov/chemistry/",
+        "PubChem | https://pubchem.ncbi.nlm.nih.gov/",
+        "Chemistry LibreTexts | https://chem.libretexts.org/",
+        "Royal Society of Chemistry | https://www.rsc.org/",
+        "American Chemical Society | https://www.acs.org/",
+        "IUPAC Periodic Table | https://iupac.org/what-we-do/periodic-table-of-elements/",
+        "NIST Computational Chemistry Comparison and Benchmark Database | https://cccbdb.nist.gov/",
     ),
 )
 
@@ -118,15 +159,24 @@ MATHEMATICS = DomainConfig(
     topics=(
         "đại số",
         "giải tích",
+        "phương trình vi phân",
         "hình học",
+        "tô pô",
         "xác suất và thống kê",
         "toán rời rạc",
+        "lí thuyết số",
+        "tối ưu hóa",
+        "giải tích số",
         "đại số tuyến tính",
+        "logic toán học",
     ),
     sources=(
-        "OpenStax Mathematics | https://openstax.org/subjects/math",
+        "MIT OpenCourseWare Mathematics | https://ocw.mit.edu/search/?d=Mathematics",
+        "Mathematics LibreTexts | https://math.libretexts.org/",
+        "American Mathematical Society | https://www.ams.org/",
+        "Wolfram MathWorld | https://mathworld.wolfram.com/",
+        "OEIS | https://oeis.org/",
         "NIST Digital Library of Mathematical Functions | https://dlmf.nist.gov/",
-        "Encyclopedia of Mathematics | https://encyclopediaofmath.org/",
     ),
 )
 
@@ -134,15 +184,23 @@ ASTRONOMY = DomainConfig(
     name="thiên văn học",
     topics=(
         "Hệ Mặt Trời",
+        "hành tinh và vệ tinh",
+        "tiểu hành tinh và sao chổi",
         "sao và tiến hóa sao",
+        "ngoại hành tinh",
+        "lỗ đen và sao neutron",
         "thiên hà",
         "vũ trụ học",
+        "sóng hấp dẫn",
         "quan sát thiên văn",
     ),
     sources=(
-        "NASA Science | https://science.nasa.gov/",
-        "ESA Science and Technology | https://sci.esa.int/",
-        "OpenStax Astronomy 2e | https://openstax.org/details/books/astronomy-2e",
+        "NASA Jet Propulsion Laboratory | https://www.jpl.nasa.gov/",
+        "European Southern Observatory | https://www.eso.org/public/science/",
+        "HubbleSite Science | https://science.nasa.gov/mission/hubble/science/",
+        "Chandra X-ray Observatory | https://chandra.harvard.edu/",
+        "NASA Exoplanet Exploration | https://exoplanets.nasa.gov/",
+        "LIGO Science | https://www.ligo.org/science/",
     ),
 )
 
@@ -150,16 +208,24 @@ EARTH_SCIENCE = DomainConfig(
     name="khoa học Trái Đất",
     topics=(
         "địa chất học",
+        "khoáng vật học",
+        "núi lửa học",
+        "địa chấn học",
         "khí tượng học",
         "hải dương học",
         "khí hậu học",
         "kiến tạo mảng",
         "chu trình địa hóa",
+        "thủy văn học",
+        "cổ khí hậu học",
     ),
     sources=(
-        "USGS Science | https://www.usgs.gov/science",
-        "NOAA | https://www.noaa.gov/",
-        "NASA Earth Science | https://science.nasa.gov/earth/",
+        "IPCC Reports | https://www.ipcc.ch/reports/",
+        "Smithsonian Global Volcanism Program | https://volcano.si.edu/",
+        "UCAR Center for Science Education | https://scied.ucar.edu/",
+        "Woods Hole Oceanographic Institution | https://www.whoi.edu/",
+        "Earth Science LibreTexts | https://geo.libretexts.org/",
+        "EPA Climate Change | https://www.epa.gov/climate-change",
     ),
 )
 
@@ -254,6 +320,29 @@ def _normalize_source(source: str, trusted_sources: tuple[str, ...]) -> str:
     return candidate
 
 
+def _anchor_key(anchor: str) -> str:
+    """Create a stable key for exact-question deduplication."""
+    return " ".join(anchor.casefold().split()).rstrip("?.!")
+
+
+def _filter_unique_documents(
+    documents: list[Document],
+    known_anchors: set[str] | None,
+) -> list[Document]:
+    """Drop duplicate questions without rejecting the whole generated batch."""
+    seen_anchors = set(known_anchors or ())
+    unique_documents: list[Document] = []
+
+    for document in documents:
+        anchor = _anchor_key(document["anchor"])
+        if anchor in seen_anchors:
+            continue
+        seen_anchors.add(anchor)
+        unique_documents.append(document)
+
+    return unique_documents
+
+
 def _validate_documents(
     documents: object,
     expected_count: int,
@@ -322,7 +411,7 @@ def _load_generation_state(output_file: str) -> tuple[int, set[str]]:
                     path,
                     index,
                 )
-                anchor = document["anchor"].strip().casefold()
+                anchor = _anchor_key(document["anchor"])
                 anchors.add(anchor)
                 count += 1
         return count, anchors
@@ -333,7 +422,7 @@ def _load_generation_state(output_file: str) -> tuple[int, set[str]]:
 
     for index, item in enumerate(documents):
         document = _validate_existing_document(item, path, index)
-        anchor = document["anchor"].strip().casefold()
+        anchor = _anchor_key(document["anchor"])
         anchors.add(anchor)
 
     return len(documents), anchors
@@ -352,7 +441,7 @@ def _append_to_json(
         existing_anchors = known_anchors
 
     new_anchors = {
-        document["anchor"].strip().casefold() for document in new_documents
+        _anchor_key(document["anchor"]) for document in new_documents
     }
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -383,6 +472,7 @@ async def _generate_science_documents(
     number_of_documents: int,
     output_file: str,
     known_anchors: set[str] | None = None,
+    generation_offset: int | None = None,
 ) -> list[Document]:
     """Generate one batch of Vietnamese science retrieval records."""
     if number_of_documents <= 0:
@@ -394,13 +484,25 @@ async def _generate_science_documents(
 
     topics_text = ", ".join(config.topics)
     sources_text = "\n".join(f"- {source}" for source in config.sources)
-    generation_offset = len(known_anchors) if known_anchors is not None else 0
+    if generation_offset is None:
+        generation_offset = len(known_anchors) if known_anchors is not None else 0
+    batch_number = generation_offset // number_of_documents
+    focus_topic = config.topics[batch_number % len(config.topics)]
+    source_cycle = batch_number // len(config.topics)
+    focus_source = config.sources[source_cycle % len(config.sources)]
+    batch_id = secrets.token_hex(4)
     prompt = f"""
 Tạo đúng {number_of_documents} mẫu retrieval hỏi đáp về {config.name} bằng tiếng Việt.
 Mục tiêu là huấn luyện mô hình phân biệt tài liệu đúng với tài liệu gần nghĩa nhưng không
 trả lời được câu hỏi.
 Đây là batch tiếp theo, bắt đầu sau {generation_offset} mẫu đã tạo. Hãy đa dạng hóa cách
 đặt câu hỏi và nội dung để hạn chế trùng với các batch trước.
+Mã batch: {batch_id}.
+
+Batch này chỉ tập trung vào chủ đề: {focus_topic}.
+Nguồn ưu tiên cho batch này: {focus_source}.
+Hãy khai thác các khái niệm hẹp, cơ chế, trường hợp áp dụng và quan hệ nguyên nhân-kết quả,
+không chỉ tạo các câu hỏi định nghĩa phổ biến.
 
 Các chủ đề được phép: {topics_text}.
 
@@ -419,7 +521,7 @@ Mỗi mẫu phải có đúng 6 trường:
 Yêu cầu chất lượng:
 - Ưu tiên định luật, định nghĩa và hiện tượng đã được khoa học công nhận.
 - Không dùng dữ kiện thời sự, số liệu dễ thay đổi hoặc tuyên bố chưa có đồng thuận.
-- Positive và hard_negative dài 3-6 câu, tương đương nhau về độ dài và độ khó.
+- Positive và hard_negative dài 2-4 câu, tương đương nhau về độ dài và độ khó.
 - Không lặp lại cùng một thông tin nhiều lần trong một đoạn.
 - Không lặp câu hỏi hoặc tài liệu giữa các mẫu.
 - Nếu không chắc chắn về một chi tiết thì không sử dụng chi tiết đó.
@@ -439,7 +541,8 @@ Yêu cầu chất lượng:
             {"role": "user", "content": prompt},
         ],
         "stream": False,
-        "temperature": 0.2,
+        "temperature": 0.4,
+        "max_tokens": 8192,
     }
 
     headers = {
@@ -463,14 +566,21 @@ Yêu cầu chất lượng:
         number_of_documents,
         config,
     )
-    _append_to_json(output_file, new_documents, known_anchors)
-    return new_documents
+    unique_documents = _filter_unique_documents(new_documents, known_anchors)
+    duplicate_count = len(new_documents) - len(unique_documents)
+    if duplicate_count:
+        print(f"Skipped {duplicate_count} duplicate records")
+    if not unique_documents:
+        raise ValueError("The model returned only duplicate records")
+    _append_to_json(output_file, unique_documents, known_anchors)
+    return unique_documents
 
 
 async def phy_doc(
     number_of_documents: int = 10,
     output_file: str = "data/physics_qa.json",
     known_anchors: set[str] | None = None,
+    generation_offset: int | None = None,
 ) -> list[Document]:
     """Generate physics retrieval documents."""
     return await _generate_science_documents(
@@ -478,6 +588,7 @@ async def phy_doc(
         number_of_documents,
         output_file,
         known_anchors,
+        generation_offset,
     )
 
 
@@ -485,6 +596,7 @@ async def bio_doc(
     number_of_documents: int = 10,
     output_file: str = "data/biology_qa.json",
     known_anchors: set[str] | None = None,
+    generation_offset: int | None = None,
 ) -> list[Document]:
     """Generate biology retrieval documents."""
     return await _generate_science_documents(
@@ -492,6 +604,7 @@ async def bio_doc(
         number_of_documents,
         output_file,
         known_anchors,
+        generation_offset,
     )
 
 
@@ -499,6 +612,7 @@ async def it_doc(
     number_of_documents: int = 10,
     output_file: str = "data/information_technology_qa.json",
     known_anchors: set[str] | None = None,
+    generation_offset: int | None = None,
 ) -> list[Document]:
     """Generate information technology retrieval documents."""
     return await _generate_science_documents(
@@ -506,6 +620,7 @@ async def it_doc(
         number_of_documents,
         output_file,
         known_anchors,
+        generation_offset,
     )
 
 
@@ -513,6 +628,7 @@ async def chemistry_doc(
     number_of_documents: int = 10,
     output_file: str = "data/chemistry_qa.json",
     known_anchors: set[str] | None = None,
+    generation_offset: int | None = None,
 ) -> list[Document]:
     """Generate chemistry retrieval documents."""
     return await _generate_science_documents(
@@ -520,6 +636,7 @@ async def chemistry_doc(
         number_of_documents,
         output_file,
         known_anchors,
+        generation_offset,
     )
 
 
@@ -527,6 +644,7 @@ async def math_doc(
     number_of_documents: int = 10,
     output_file: str = "data/mathematics_qa.json",
     known_anchors: set[str] | None = None,
+    generation_offset: int | None = None,
 ) -> list[Document]:
     """Generate mathematics retrieval documents."""
     return await _generate_science_documents(
@@ -534,6 +652,7 @@ async def math_doc(
         number_of_documents,
         output_file,
         known_anchors,
+        generation_offset,
     )
 
 
@@ -541,6 +660,7 @@ async def astronomy_doc(
     number_of_documents: int = 10,
     output_file: str = "data/astronomy_qa.json",
     known_anchors: set[str] | None = None,
+    generation_offset: int | None = None,
 ) -> list[Document]:
     """Generate astronomy retrieval documents."""
     return await _generate_science_documents(
@@ -548,6 +668,7 @@ async def astronomy_doc(
         number_of_documents,
         output_file,
         known_anchors,
+        generation_offset,
     )
 
 
@@ -555,6 +676,7 @@ async def earth_science_doc(
     number_of_documents: int = 10,
     output_file: str = "data/earth_science_qa.json",
     known_anchors: set[str] | None = None,
+    generation_offset: int | None = None,
 ) -> list[Document]:
     """Generate earth science retrieval documents."""
     return await _generate_science_documents(
@@ -562,6 +684,7 @@ async def earth_science_doc(
         number_of_documents,
         output_file,
         known_anchors,
+        generation_offset,
     )
 
 
@@ -578,54 +701,76 @@ async def _generate_domain_batches(
     batch_size: int,
     max_retries: int,
     semaphore: asyncio.Semaphore,
+    workers_per_domain: int,
 ) -> int:
-    """Generate one domain in small batches and resume from existing data."""
+    """Generate one domain concurrently and resume from existing data."""
     current_count, known_anchors = _load_generation_state(str(output_file))
     if current_count >= target_count:
         print(f"[{domain_name}] Already complete: {current_count}/{target_count}")
         return current_count
 
     print(f"[{domain_name}] Starting at {current_count}/{target_count}")
+    state_lock = asyncio.Lock()
+    reserved_count = 0
     completed_batches = 0
 
-    while current_count < target_count:
-        current_batch_size = min(batch_size, target_count - current_count)
-        last_error: Exception | None = None
+    async def worker() -> None:
+        nonlocal current_count, reserved_count, completed_batches
 
-        for attempt in range(1, max_retries + 1):
-            try:
-                async with semaphore:
-                    documents = await generator(
-                        current_batch_size,
-                        str(output_file),
-                        known_anchors,
+        while True:
+            async with state_lock:
+                remaining = target_count - current_count - reserved_count
+                if remaining <= 0:
+                    return
+                current_batch_size = min(batch_size, remaining)
+                generation_offset = current_count + reserved_count
+                reserved_count += current_batch_size
+
+            last_error: Exception | None = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    async with semaphore:
+                        documents = await generator(
+                            current_batch_size,
+                            str(output_file),
+                            known_anchors,
+                            generation_offset,
+                        )
+                    break
+                except (
+                    httpx.HTTPError,
+                    json.JSONDecodeError,
+                    KeyError,
+                    ValueError,
+                ) as error:
+                    last_error = error
+                    if attempt == max_retries:
+                        async with state_lock:
+                            reserved_count -= current_batch_size
+                        raise RuntimeError(
+                            f"[{domain_name}] Batch failed after "
+                            f"{max_retries} attempts"
+                        ) from error
+
+                    delay_seconds = min(60, 2 ** attempt)
+                    print(
+                        f"[{domain_name}] Attempt {attempt}/{max_retries} failed: "
+                        f"{error}. Retrying in {delay_seconds}s"
                     )
-                break
-            except (
-                httpx.HTTPError,
-                json.JSONDecodeError,
-                KeyError,
-                ValueError,
-            ) as error:
-                last_error = error
-                if attempt == max_retries:
-                    raise RuntimeError(
-                        f"[{domain_name}] Batch failed after {max_retries} attempts"
-                    ) from error
+                    await asyncio.sleep(delay_seconds)
+            else:
+                async with state_lock:
+                    reserved_count -= current_batch_size
+                raise RuntimeError(f"[{domain_name}] Batch failed") from last_error
 
-                delay_seconds = min(60, 2 ** attempt)
-                print(
-                    f"[{domain_name}] Attempt {attempt}/{max_retries} failed: "
-                    f"{error}. Retrying in {delay_seconds}s"
-                )
-                await asyncio.sleep(delay_seconds)
-        else:
-            raise RuntimeError(f"[{domain_name}] Batch failed") from last_error
+            async with state_lock:
+                reserved_count -= current_batch_size
+                current_count += len(documents)
+                completed_batches += 1
+                if completed_batches % 10 == 0 or current_count == target_count:
+                    print(f"[{domain_name}] Progress: {current_count}/{target_count}")
 
-        current_count += len(documents)
-        completed_batches += 1
-        if completed_batches % 10 == 0 or current_count == target_count:
-            print(f"[{domain_name}] Progress: {current_count}/{target_count}")
+    await asyncio.gather(*(worker() for _ in range(workers_per_domain)))
 
     return current_count
 
@@ -636,6 +781,7 @@ async def main(
     max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
     max_retries: int = DEFAULT_MAX_RETRIES,
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
+    workers_per_domain: int = DEFAULT_WORKERS_PER_DOMAIN,
 ) -> dict[str, int]:
     """Generate a balanced Vietnamese science retrieval dataset."""
     if total_documents <= 0:
@@ -644,6 +790,8 @@ async def main(
         raise ValueError("batch_size must be greater than zero")
     if max_concurrency <= 0:
         raise ValueError("max_concurrency must be greater than zero")
+    if workers_per_domain <= 0:
+        raise ValueError("workers_per_domain must be greater than zero")
     if max_retries <= 0:
         raise ValueError("max_retries must be greater than zero")
 
@@ -675,6 +823,7 @@ async def main(
                 batch_size=batch_size,
                 max_retries=max_retries,
                 semaphore=semaphore,
+                workers_per_domain=workers_per_domain,
             )
         )
 
@@ -696,6 +845,9 @@ if __name__ == "__main__":
             batch_size=int(os.getenv("SCIENCE_BATCH_SIZE", DEFAULT_BATCH_SIZE)),
             max_concurrency=int(
                 os.getenv("SCIENCE_MAX_CONCURRENCY", DEFAULT_MAX_CONCURRENCY)
+            ),
+            workers_per_domain=int(
+                os.getenv("SCIENCE_WORKERS_PER_DOMAIN", DEFAULT_WORKERS_PER_DOMAIN)
             ),
             max_retries=int(
                 os.getenv("SCIENCE_MAX_RETRIES", DEFAULT_MAX_RETRIES)
