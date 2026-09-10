@@ -4,7 +4,13 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from database.models import FinanceModel, GeneralModel, GeneralTriplet, LegalModel
+from database.models import (
+    FinanceModel,
+    GeneralModel,
+    GeneralTriplet,
+    LegalModel,
+    TripletModel,
+)
 
 class SQL_Manager:
     def __init__(self, database_url: str | None = None):
@@ -48,6 +54,25 @@ class SQL_Manager:
                 source=data.source,
                 title=data.title,
                 topic=data.topic,
+                anchor=data.anchor,
+                positive=data.positive,
+                hard_negative=data.hard_negative,
+            )
+        )
+
+    def create_triplet(self) -> None:
+        """Create the unified curated triplet table if it does not exist."""
+        TripletModel.__table__.create(self.engine, checkfirst=True)
+
+    def insert_triplet(self, data: TripletModel) -> None:
+        """Add one row to the unified curated triplet table."""
+        self.con.add(
+            TripletModel(
+                data_id=data.data_id,
+                source=data.source,
+                title=data.title,
+                topic=data.topic,
+                domain=data.domain,
                 anchor=data.anchor,
                 positive=data.positive,
                 hard_negative=data.hard_negative,

@@ -4,8 +4,8 @@
 The crawler uses public HTML/JSON endpoints only, with a conservative request
 rate.  It produces three datasets:
 
-* ``banking_faq.parquet``: Vietcombank (new and legacy portal) and ACB QR.
-* ``legal_bhxh_faq.parquet``: BHXH Vietnam and Ministry of Justice legal FAQs.
+* ``banking_faq.parquet``: Vietcombank, ACB QR, and MSB.
+* ``legal_bhxh_faq.parquet``: BHXH Vietnam, legal FAQ books, and public-service Q&A.
 * ``consumer_faq.parquet``: MobiFone 5G and Vietnam Airlines.
 
 The legacy Vietcombank portal and the Ministry of Justice site occasionally
@@ -28,11 +28,11 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable, Iterable
-from urllib.parse import parse_qs, urlencode, urljoin, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -59,6 +59,8 @@ BHXH_URL = "https://baohiemxahoi.gov.vn/hoidap/Pages/default.aspx"
 MOJ_URL = "https://pbgdpl.moj.gov.vn/qt/tl-pbgdpl/Pages/sach.aspx"
 VNA_URL = "https://www.vietnamairlines.com/vn/vi/support/faq"
 ACB_URL = "https://qrportal.acb.com.vn/help"
+MSB_URL = "https://www.msb.com.vn/lien-he-ho-tro/cau-hoi-thuong-gap/"
+LAOCAI_URL = "https://www.laocai.gov.vn/Default.aspx?dvid=1231&pageid=95227&sid=1365"
 
 PARQUET_COLUMNS = [
     "id",
@@ -130,22 +132,35 @@ class HttpClient:
             total=3,
             backoff_factor=0.8,
             status_forcelist=(429, 500, 502, 503, 504),
-            allowed_methods=("GET",),
+            allowed_methods=("GET", "POST"),
         )
         adapter = HTTPAdapter(max_retries=retry)
         self.session.mount("https://", adapter)
         self.session.headers.update({"User-Agent": USER_AGENT, "Accept-Language": "vi,en;q=0.8"})
 
     def get(self, url: str, *, params: dict[str, str | int] | None = None) -> requests.Response:
-        wait_seconds = self.delay_seconds - (time.monotonic() - self._last_request_at)
-        if wait_seconds > 0:
-            time.sleep(wait_seconds)
+        self._wait_for_rate_limit()
         response = self.session.get(url, params=params, timeout=TIMEOUT_SECONDS)
         self._last_request_at = time.monotonic()
         response.raise_for_status()
         if is_access_control_page(response.text):
             response = self._curl_fallback(url, params=params)
         return response
+
+    def post(self, url: str, *, data: dict[str, str | int]) -> requests.Response:
+        """Submit a public FAQ pagination/detail form while respecting the rate limit."""
+        self._wait_for_rate_limit()
+        response = self.session.post(url, data=data, timeout=TIMEOUT_SECONDS)
+        self._last_request_at = time.monotonic()
+        response.raise_for_status()
+        if is_access_control_page(response.text):
+            raise CrawlError(f"POST to {url} returned an access-control page.")
+        return response
+
+    def _wait_for_rate_limit(self) -> None:
+        wait_seconds = self.delay_seconds - (time.monotonic() - self._last_request_at)
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
 
     def _curl_fallback(self, url: str, *, params: dict[str, str | int] | None) -> requests.Response:
         """Retry WAF-blocked public pages with curl's browser TLS fingerprint."""
@@ -356,6 +371,160 @@ def crawl_acb(client: HttpClient) -> list[FAQRow]:
     if not rows:
         raise CrawlError("ACB QR FAQ table was not found.")
     return rows
+
+
+def parse_msb_faq_html(html: str, url: str = MSB_URL) -> list[FAQRow]:
+    """Parse MSB's FAQ accordion HTML returned by its public WordPress API."""
+    soup = BeautifulSoup(html, "html.parser")
+    rows: list[FAQRow] = []
+    for item in soup.select("details.msb-faq__item"):
+        question = item.select_one(".msb-faq__qtext")
+        answer = item.select_one(".msb-faq__a")
+        categories = clean_text(item.get("data-categories", "")).replace(",", " > ")
+        row = make_row(
+            "MSB",
+            "banking",
+            question.get_text(" ", strip=True) if question else "",
+            answer.get_text(" ", strip=True) if answer else "",
+            url,
+            categories,
+        )
+        if row:
+            rows.append(row)
+    return deduplicate_rows(rows)
+
+
+def crawl_msb(client: HttpClient) -> list[FAQRow]:
+    """Crawl all MSB FAQ pages through the site's public WordPress endpoint."""
+    landing = client.get(MSB_URL)
+    assert_not_blocked(landing.text, "MSB")
+    page = BeautifulSoup(landing.text, "html.parser")
+    container = page.select_one("[data-ajax-url][data-post-type]")
+    if not container:
+        raise CrawlError("MSB FAQ API configuration was not found.")
+
+    endpoint = container.get("data-ajax-url")
+    nonce = container.get("data-nonce")
+    if not endpoint or not nonce:
+        raise CrawlError("MSB FAQ API endpoint or nonce was not found.")
+    per_page = 100
+    common_data = {
+        "action": "msb_contact_faq_load",
+        "nonce": nonce,
+        "post_type": container.get("data-post-type", "msb_faq"),
+        "taxonomy": container.get("data-taxonomy", "msb_product_group"),
+        "tab_id": container.get("data-active-tab", ""),
+        "per_page": per_page,
+        "orderby": container.get("data-orderby", "date_desc"),
+        "search": "",
+        "empty_text": container.get("data-empty-text", "Không tìm thấy câu hỏi nào."),
+        "empty_icon": container.get("data-empty-icon", ""),
+    }
+    first_payload = {**common_data, "paged": 1}
+    first_response = client.post(endpoint, data=first_payload).json()
+    if not first_response.get("success") or not isinstance(first_response.get("data", {}).get("html"), str):
+        raise CrawlError("MSB FAQ API returned an unexpected payload.")
+
+    first_html = first_response["data"]["html"]
+    first_page = BeautifulSoup(first_html, "html.parser")
+    page_numbers = [int(node["data-page"]) for node in first_page.select("[data-page]") if node.get("data-page", "").isdigit()]
+    total_pages = max(page_numbers, default=1)
+    rows = parse_msb_faq_html(first_html)
+    for page_number in range(2, total_pages + 1):
+        response = client.post(endpoint, data={**common_data, "paged": page_number}).json()
+        html = response.get("data", {}).get("html", "") if response.get("success") else ""
+        if not isinstance(html, str):
+            raise CrawlError(f"MSB FAQ API page {page_number} returned invalid HTML.")
+        rows.extend(parse_msb_faq_html(html))
+    rows = deduplicate_rows(rows)
+    if not rows:
+        raise CrawlError("MSB FAQ API returned no complete FAQ pairs.")
+    return rows
+
+
+def postback_target(href: str) -> tuple[str, str] | None:
+    """Extract ASP.NET postback target and argument from a JavaScript link."""
+    match = re.search(r"__doPostBack\('([^']+)',\s*'([^']*)'\)", href)
+    return (match.group(1), match.group(2)) if match else None
+
+
+def laocai_form_data(soup: BeautifulSoup, target: str, argument: str) -> dict[str, str]:
+    """Build a safe ASP.NET postback payload from current hidden form fields."""
+    form = soup.select_one("form")
+    if not form:
+        raise CrawlError("Lào Cai FAQ form was not found.")
+    data = {input_node["name"]: input_node.get("value", "") for input_node in form.select('input[type="hidden"][name]')}
+    data["__EVENTTARGET"] = target
+    data["__EVENTARGUMENT"] = argument
+    return data
+
+
+def laocai_postback(client: HttpClient, soup: BeautifulSoup, target: str, argument: str) -> BeautifulSoup:
+    """Submit an ASP.NET FAQ list/detail navigation event."""
+    response = client.post(LAOCAI_URL, data=laocai_form_data(soup, target, argument))
+    return BeautifulSoup(response.text, "html.parser")
+
+
+def parse_laocai_detail(soup: BeautifulSoup) -> FAQRow | None:
+    """Extract a complete public-service Q&A pair from one Lào Cai detail page."""
+    detail = soup.select_one(".DetailQuestion")
+    if not detail:
+        return None
+    title = detail.select_one(".blockTitle .divFirst")
+    answer_block = detail.select_one(".blockDetailAns fieldset")
+    if not title or not answer_block:
+        return None
+    answer_block.legend.decompose() if answer_block.legend else None
+    question = re.sub(r"^Câu hỏi\s*:\s*", "", title.get_text(" ", strip=True), flags=re.IGNORECASE)
+    answer = answer_block.get_text(" ", strip=True)
+    category_node = detail.find(string=re.compile(r"Người trả lời\s*:", re.IGNORECASE))
+    category = ""
+    if category_node and category_node.parent:
+        category = clean_text(category_node.parent.parent.get_text(" ", strip=True) if category_node.parent.parent else "")
+        category = re.sub(r"^Người trả lời\s*:\s*", "", category, flags=re.IGNORECASE)
+        category = re.sub(r"\s*(Chức vụ|Ngày trả lời)\s*:.*$", "", category, flags=re.IGNORECASE)
+    return make_row("Cổng Hỏi đáp Lào Cai", "legal_bhxh", question, answer, LAOCAI_URL, category)
+
+
+def crawl_laocai(client: HttpClient, max_pages: int, max_items: int) -> tuple[list[FAQRow], int]:
+    """Crawl Lào Cai public-service answers by preserving ASP.NET form state."""
+    landing = response_soup(client, LAOCAI_URL)
+    list_id = "ctrl_162673_95$gvQuestionList"
+    total_node = landing.select_one("#ctrl_162673_95_lbTongCauHoi")
+    page_size = len(landing.select("#ctrl_162673_95_gvQuestionList tr")) - 1
+    if not total_node or page_size <= 0:
+        raise CrawlError("Lào Cai FAQ list statistics were not found.")
+    total_pages = (int(clean_text(total_node.get_text())) + page_size - 1) // page_size
+    if max_pages:
+        total_pages = min(total_pages, max_pages)
+
+    rows: list[FAQRow] = []
+    skipped = 0
+    for page_number in range(1, total_pages + 1):
+        list_page = landing if page_number == 1 else laocai_postback(client, landing, list_id, f"Page${page_number}")
+        links = list_page.select('a[href*="$lbCauHoi"]')
+        if max_items:
+            links = links[: max_items - len(rows) - skipped]
+        LOGGER.info("Lào Cai page %s/%s: %s item(s)", page_number, total_pages, len(links))
+        for link in links:
+            event = postback_target(link.get("href", ""))
+            if not event:
+                skipped += 1
+                continue
+            detail_page = laocai_postback(client, list_page, *event)
+            row = parse_laocai_detail(detail_page)
+            if row:
+                rows.append(row)
+            else:
+                skipped += 1
+            back_link = detail_page.select_one('a[href*="$lbBack"]')
+            back_event = postback_target(back_link.get("href", "")) if back_link else None
+            if not back_event:
+                raise CrawlError("Lào Cai FAQ detail page did not expose a return-to-list event.")
+            list_page = laocai_postback(client, detail_page, *back_event)
+        if max_items and len(rows) + skipped >= max_items:
+            break
+    return deduplicate_rows(rows), skipped
 
 
 def extract_bhxh_categories(soup: BeautifulSoup) -> dict[int, str]:
@@ -587,18 +756,41 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Limit BHXH list pages per category for a trial run; 0 crawls all pages (default: %(default)s).",
     )
+    parser.add_argument(
+        "--laocai-max-pages",
+        type=int,
+        default=0,
+        help="Limit Lào Cai FAQ list pages for a trial run; 0 crawls all pages (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--laocai-max-items",
+        type=int,
+        default=0,
+        help="Limit Lào Cai FAQ details for a trial run; 0 crawls every item in selected pages (default: %(default)s).",
+    )
     parser.add_argument("--moj-max-documents", type=int, default=100, help="Maximum legal FAQ books/pages to inspect (default: %(default)s).")
-    parser.add_argument("--sources", nargs="+", choices=("mobifone", "vietcombank", "vietcombank_legacy", "bhxh", "moj", "vna", "acb"), help="Optional subset of sources.")
+    parser.add_argument(
+        "--sources",
+        nargs="+",
+        choices=("mobifone", "vietcombank", "vietcombank_legacy", "bhxh", "moj", "vna", "acb", "msb", "laocai"),
+        help="Optional subset of sources.",
+    )
     parser.add_argument("--verbose", action="store_true", help="Enable progress logs.")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    if args.delay < 0 or args.bhxh_max_pages_per_category < 0 or args.moj_max_documents < 1:
+    if (
+        args.delay < 0
+        or args.bhxh_max_pages_per_category < 0
+        or args.laocai_max_pages < 0
+        or args.laocai_max_items < 0
+        or args.moj_max_documents < 1
+    ):
         raise SystemExit("--delay and page limits must be non-negative; --moj-max-documents must be positive.")
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(levelname)s %(message)s")
-    selected = set(args.sources or ("mobifone", "vietcombank", "vietcombank_legacy", "bhxh", "moj", "vna", "acb"))
+    selected = set(args.sources or ("mobifone", "vietcombank", "vietcombank_legacy", "bhxh", "moj", "vna", "acb", "msb", "laocai"))
     client = HttpClient(args.delay)
     grouped_rows: dict[str, list[FAQRow]] = {"banking": [], "legal_bhxh": [], "consumer": []}
     reports: list[CrawlReport] = []
@@ -610,8 +802,10 @@ def main() -> int:
         ("Bộ Tư pháp", "legal_bhxh", lambda: crawl_moj(client, args.moj_max_documents)),
         ("Vietnam Airlines", "consumer", lambda: crawl_vietnam_airlines(client)),
         ("ACB QR Portal", "banking", lambda: crawl_acb(client)),
+        ("MSB", "banking", lambda: crawl_msb(client)),
+        ("Cổng Hỏi đáp Lào Cai", "legal_bhxh", lambda: crawl_laocai(client, args.laocai_max_pages, args.laocai_max_items)),
     ]
-    job_keys = ("mobifone", "vietcombank", "vietcombank_legacy", "bhxh", "moj", "vna", "acb")
+    job_keys = ("mobifone", "vietcombank", "vietcombank_legacy", "bhxh", "moj", "vna", "acb", "msb", "laocai")
     try:
         for key, (name, source_group, job) in zip(job_keys, jobs, strict=True):
             if key not in selected:

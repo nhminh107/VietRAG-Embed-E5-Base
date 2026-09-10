@@ -12,7 +12,10 @@ from script.crawl_faq_sources import (
     extract_faq_pairs_from_html,
     extract_faq_pairs_from_text,
     is_access_control_page,
+    parse_laocai_detail,
+    parse_msb_faq_html,
     parse_bhxh_detail,
+    postback_target,
 )
 
 
@@ -56,3 +59,32 @@ def test_bhxh_detail_without_answer_is_not_emitted() -> None:
 def test_captcha_component_is_not_mistaken_for_a_block_page() -> None:
     assert not is_access_control_page("<script>const captchaLabel = 'CAPTCHA';</script>")
     assert is_access_control_page("Access denied")
+
+
+def test_parse_msb_faq_html() -> None:
+    rows = parse_msb_faq_html(
+        '<details class="msb-faq__item" data-categories="Tài khoản, Thẻ">'
+        '<span class="msb-faq__qtext">Câu hỏi MSB</span>'
+        '<div class="msb-faq__a"><p>Trả lời MSB</p></div></details>'
+    )
+
+    assert len(rows) == 1
+    assert rows[0].source == "MSB"
+    assert rows[0].category == "Tài khoản > Thẻ"
+    assert rows[0].answer == "Trả lời MSB"
+
+
+def test_parse_laocai_detail_and_postback_target() -> None:
+    soup = BeautifulSoup(
+        '<div class="DetailQuestion"><div class="blockTitle"><div class="divFirst">'
+        'Câu hỏi: Câu hỏi Lào Cai</div></div><div class="blockDetailAns"><fieldset>'
+        '<legend>Nội dung câu trả lời</legend><p>Trả lời Lào Cai</p></fieldset></div></div>',
+        "html.parser",
+    )
+
+    row = parse_laocai_detail(soup)
+
+    assert row is not None
+    assert row.question == "Câu hỏi Lào Cai"
+    assert row.answer == "Trả lời Lào Cai"
+    assert postback_target("javascript:__doPostBack('grid','Page$2')") == ("grid", "Page$2")
