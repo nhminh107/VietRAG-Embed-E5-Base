@@ -6,6 +6,7 @@ dependencies = [
     "accelerate>=1.1.0",
     "transformers",
     "pandas",
+    "beautifulsoup4>=4.12",
     "pydantic",
     "datasets==3.6.0",
     "seacrowd>=0.2.2",
@@ -13,6 +14,7 @@ dependencies = [
     "sqlalchemy>=2.0",
     "psycopg[binary]>=3.2",
     "python-dotenv>=1.0",
+    "requests>=2.32",
     "pyarrow",
     "sentence_transformers",
     "faiss-cpu"

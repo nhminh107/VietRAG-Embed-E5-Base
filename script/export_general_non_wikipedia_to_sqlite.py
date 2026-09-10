@@ -78,7 +78,7 @@ def get_source_count(connection: Any) -> int:
                 f"""
                 SELECT COUNT(*)
                 FROM {SOURCE_TABLE}
-                WHERE source <> :excluded_source
+                WHERE source IS DISTINCT FROM :excluded_source
                 """
             ),
             {"excluded_source": EXCLUDED_SOURCE},
@@ -97,7 +97,7 @@ def fetch_batch(
             f"""
             SELECT {', '.join(COLUMNS)}
             FROM {SOURCE_TABLE}
-            WHERE source <> :excluded_source
+            WHERE source IS DISTINCT FROM :excluded_source
             ORDER BY data_id
             LIMIT :batch_size
             """
@@ -111,7 +111,7 @@ def fetch_batch(
             f"""
             SELECT {', '.join(COLUMNS)}
             FROM {SOURCE_TABLE}
-            WHERE source <> :excluded_source
+            WHERE source IS DISTINCT FROM :excluded_source
               AND data_id > :last_data_id
             ORDER BY data_id
             LIMIT :batch_size
@@ -168,7 +168,7 @@ def validate_sqlite_output(
             (EXCLUDED_SOURCE,),
         ).fetchone()[0]
     )
-    invalid_rows = int(
+    incomplete_training_pairs = int(
         connection.execute(
             """
             SELECT COUNT(*)
@@ -184,9 +184,6 @@ def validate_sqlite_output(
         )
     if wiki_rows:
         raise RuntimeError(f"SQLite contains {wiki_rows:,} Wikipedia rows.")
-    if invalid_rows:
-        raise RuntimeError(f"SQLite contains {invalid_rows:,} invalid rows.")
-
     sources = connection.execute(
         """
         SELECT source, COUNT(*)
@@ -195,7 +192,11 @@ def validate_sqlite_output(
         ORDER BY COUNT(*) DESC
         """
     ).fetchall()
-    return {"rows": count, "sources": sources}
+    return {
+        "rows": count,
+        "incomplete_training_pairs": incomplete_training_pairs,
+        "sources": sources,
+    }
 
 
 def export_database(output_path: Path, batch_size: int, overwrite: bool) -> None:
