@@ -29,10 +29,17 @@ SOURCE_FILE = PROJECT_DIR / "data/mmarco-vietnamese-rag-qa/mmarco_vi_rag_qa_600k
 SOURCE_NAME = "mMARCO Vietnamese filtered 600k"
 SOURCE_TOPIC = "mMARCO triples/train"
 SOURCE_DOMAIN = "web_passage_qa"
+ID_PREFIX = "mmarco_vi"
 BATCH_SIZE = 5_000
 
 
-def iter_rows(source_file: Path) -> Iterator[dict[str, str | None]]:
+def iter_rows(
+    source_file: Path,
+    source_name: str,
+    source_topic: str,
+    source_domain: str,
+    id_prefix: str,
+) -> Iterator[dict[str, str | None]]:
     """Stream valid Parquet rows and attach stable database metadata."""
     parquet_file = pq.ParquetFile(source_file)
     expected_columns = {"query", "positive", "negative"}
@@ -60,11 +67,11 @@ def iter_rows(source_file: Path) -> Iterator[dict[str, str | None]]:
                 raise ValueError(f"Degenerate triplet at Parquet row {row_index}.")
 
             yield {
-                "data_id": f"mmarco_vi_{row_index:06d}",
-                "source": SOURCE_NAME,
+                "data_id": f"{id_prefix}_{row_index:06d}",
+                "source": source_name,
                 "title": None,
-                "topic": SOURCE_TOPIC,
-                "domain": SOURCE_DOMAIN,
+                "topic": source_topic,
+                "domain": source_domain,
                 "anchor": anchor,
                 "positive": positive,
                 "hard_negative": hard_negative,
@@ -72,18 +79,36 @@ def iter_rows(source_file: Path) -> Iterator[dict[str, str | None]]:
             row_index += 1
 
 
-def validate_source(source_file: Path) -> int:
+def validate_source(
+    source_file: Path,
+    source_name: str,
+    source_topic: str,
+    source_domain: str,
+    id_prefix: str,
+) -> int:
     """Validate the complete source artifact before any database mutation."""
     if not source_file.is_file():
         raise FileNotFoundError(f"Missing source Parquet: {source_file}")
-    retained = sum(1 for _ in iter_rows(source_file))
+    retained = sum(
+        1
+        for _ in iter_rows(
+            source_file, source_name, source_topic, source_domain, id_prefix
+        )
+    )
     if retained == 0:
         raise RuntimeError("Source Parquet contains no usable triplets.")
     print(f"Validated source rows: {retained:,}", flush=True)
     return retained
 
 
-def load_rows(engine: Any, source_file: Path) -> int:
+def load_rows(
+    engine: Any,
+    source_file: Path,
+    source_name: str,
+    source_topic: str,
+    source_domain: str,
+    id_prefix: str,
+) -> int:
     """Stage and insert all rows, returning the number newly inserted."""
     TripletModel.__table__.create(engine, checkfirst=True)
     with engine.begin() as connection:
@@ -111,7 +136,9 @@ def load_rows(engine: Any, source_file: Path) -> int:
         )
         with raw_connection.cursor() as cursor:
             with cursor.copy(copy_sql) as copy:
-                for row in iter_rows(source_file):
+                for row in iter_rows(
+                    source_file, source_name, source_topic, source_domain, id_prefix
+                ):
                     copy.write_row(
                         (
                             row["data_id"],
@@ -138,7 +165,7 @@ def load_rows(engine: Any, source_file: Path) -> int:
             return cursor.rowcount
 
 
-def validate_database(engine: Any, expected_rows: int) -> None:
+def validate_database(engine: Any, expected_rows: int, source_name: str) -> None:
     """Confirm complete source cardinality and required fields after loading."""
     statement = select(
         func.count().label("rows"),
@@ -151,7 +178,7 @@ def validate_database(engine: Any, expected_rows: int) -> None:
             | (TripletModel.positive == TripletModel.hard_negative)
         )
         .label("invalid"),
-    ).where(TripletModel.source == SOURCE_NAME)
+    ).where(TripletModel.source == source_name)
     with engine.connect() as connection:
         result = connection.execute(statement).one()
     if result.rows != expected_rows:
@@ -173,6 +200,10 @@ def validate_database(engine: Any, expected_rows: int) -> None:
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-file", type=Path, default=SOURCE_FILE)
+    parser.add_argument("--source-name", default=SOURCE_NAME)
+    parser.add_argument("--source-topic", default=SOURCE_TOPIC)
+    parser.add_argument("--source-domain", default=SOURCE_DOMAIN)
+    parser.add_argument("--id-prefix", default=ID_PREFIX)
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -183,7 +214,13 @@ def parse_arguments() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_arguments()
-    expected_rows = validate_source(args.source_file)
+    expected_rows = validate_source(
+        args.source_file,
+        args.source_name,
+        args.source_topic,
+        args.source_domain,
+        args.id_prefix,
+    )
     if args.dry_run:
         return
 
@@ -193,9 +230,16 @@ def main() -> None:
         raise ValueError("DATABASE_URL is not set.")
     engine = create_engine(database_url, pool_pre_ping=True)
     try:
-        inserted_rows = load_rows(engine, args.source_file)
+        inserted_rows = load_rows(
+            engine,
+            args.source_file,
+            args.source_name,
+            args.source_topic,
+            args.source_domain,
+            args.id_prefix,
+        )
         print(f"Newly inserted rows: {inserted_rows:,}", flush=True)
-        validate_database(engine, expected_rows)
+        validate_database(engine, expected_rows, args.source_name)
     finally:
         engine.dispose()
 
