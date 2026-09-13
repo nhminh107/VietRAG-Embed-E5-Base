@@ -1,0 +1,20 @@
+{
+  "id": "nhminh107/vietembed-rag-v1-vn-mteb-benchmark",
+  "title": "VietEmbed RAG V1 VN-MTEB Benchmark",
+  "code_file": "VietEmbed-RAG-V1-VN-MTEB-Benchmark.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "true",
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [
+    "nhminh107/mmarco-vi-shardholdout-04-05-v1"
+  ],
+  "competition_sources": [],
+  "kernel_sources": [
+    "nhminh107/vietrag-e5-final-training-smoke-test/349213256"
+  ],
+  "model_sources": []
+}
