@@ -1,43 +1,70 @@
 # VietRAG-Embed-E5-Base
 
-Pipeline chuẩn bị dữ liệu huấn luyện cho mô hình embedding/RAG tiếng Việt dựa trên `multilingual-e5-base`. Project tập trung vào tạo triplet truy hồi có thể truy vết nguồn: `anchor`, `positive`, `hard_negative`.
+A data preparation, fine-tuning, and evaluation pipeline for a Vietnamese RAG embedding model based on `multilingual-e5-base`. The project focuses on traceable retrieval training data in pair or triplet form: `anchor`, `positive`, and `hard_negative`.
 
 ```mermaid
 flowchart LR
-    A[Thu thập dữ liệu] --- B[Làm sạch và chuẩn hoá]
+    A[Collect data] --- B[Clean and normalize]
     B --- C[PostgreSQL]
-    C --- D[Tạo triplet và hard negative]
-    D --- E[Kiểm tra chất lượng]
-    E --- F[SQLite hoặc Parquet để huấn luyện]
+    C --- D[Build pairs and hard negatives]
+    D --- E[Quality checks]
+    E --- F[SQLite or Parquet for training]
+    F --- G[Fine-tune and benchmark]
 ```
 
-## Thành phần chính
+## Benchmark highlights
 
-| Thư mục | Vai trò |
+The final model was evaluated on an NVIDIA Tesla T4 with E5-compatible `query:` and `passage:` prefixes.
+
+### mMARCO-VI held-out retrieval
+
+The in-domain test set contains 4,599 unseen queries and 7,949 candidate passages from mMARCO-VI shards 04–05.
+
+| Metric | Score |
+| --- | ---: |
+| Recall@1 | 0.8419 |
+| Recall@5 | 0.9533 |
+| Recall@10 | 0.9698 |
+| MRR@10 | 0.8907 |
+| nDCG@10 | 0.9102 |
+
+### Selected VN-MTEB retrieval results
+
+| Task | Score |
+| --- | ---: |
+| SciFact-VN | 0.6130 |
+| TRECCOVID-VN | 0.6068 |
+| Quora-VN | 0.5652 |
+
+The mMARCO-VI result is an in-domain diagnostic and is reported separately from VN-MTEB. Detailed outputs and run notes are available in [`benchmark/kaggle_v6_results`](benchmark/kaggle_v6_results/).
+
+## Project structure
+
+| Directory | Purpose |
 | --- | --- |
-| `preprocess/` | Chuẩn hoá, gộp và tái tạo dữ liệu tổng quát/khoa học. |
-| `extractor/` | Tạo hard negative từ bảng `general` bằng FAISS IVF-PQ. |
-| `script/` | Nạp dữ liệu, xây dựng tập mMARCO, làm sạch và xuất artifact huấn luyện. |
-| `database/` | Khai báo schema SQLAlchemy và quản lý kết nối PostgreSQL. |
-| `train/` | Notebook fine-tuning mô hình embedding. |
-| `benchmark/` | Notebook đánh giá VN-MTEB. |
-| `tests/` | Kiểm thử các hàm làm sạch, nạp và chọn dữ liệu. |
+| `preprocess/` | Normalize, merge, and reconstruct general and scientific data. |
+| `extractor/` | Mine hard negatives from the `general` table with FAISS IVF-PQ. |
+| `script/` | Ingest data, build mMARCO datasets, clean records, and export training artifacts. |
+| `database/` | Define SQLAlchemy schemas and manage PostgreSQL connections. |
+| `train/` | Fine-tune the embedding model from pair and triplet records. |
+| `benchmark/` | Evaluate the model on VN-MTEB and the held-out mMARCO-VI set. |
+| `tests/` | Test cleaning, ingestion, and data-selection utilities. |
 
-## Chuẩn bị môi trường
+## Environment setup
 
-Yêu cầu Python 3 và PostgreSQL. Tạo file `.env` tại thư mục gốc:
+Python 3 and PostgreSQL are required. Create a `.env` file in the repository root:
 
 ```env
 DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST:5432/DATABASE
 ```
 
-Cài dependencies từ lockfile:
+Install the locked dependencies:
 
 ```bash
 uv sync
 ```
 
-Hoặc dùng Conda theo môi trường của dự án:
+Or use the project's Conda environment:
 
 ```bash
 source ~/miniconda3/etc/profile.d/conda.sh
@@ -45,9 +72,9 @@ conda activate DL_Env
 uv sync
 ```
 
-## Luồng sử dụng tiêu biểu
+## Typical workflow
 
-### 1. Xây dựng và kiểm tra dữ liệu mMARCO
+### 1. Build and validate the mMARCO dataset
 
 ```bash
 python script/build_mmarco_vietnamese_rag_qa_parquet.py \
@@ -57,23 +84,23 @@ python script/build_mmarco_vietnamese_rag_qa_parquet.py \
 python script/load_mmarco_vietnamese_triplets_to_postgres.py --dry-run
 ```
 
-`--dry-run` chỉ xác thực schema và chất lượng Parquet, không ghi PostgreSQL. Bỏ cờ này để nạp vào bảng `triplet`.
+`--dry-run` validates the Parquet schema and data quality without writing to PostgreSQL. Remove the flag to insert records into the `triplet` table.
 
-### 2. Tạo hard negative cho dữ liệu tổng quát
+### 2. Mine hard negatives
 
-Script dưới đây dùng checkpoint cục bộ tại `models/checkpoint-40236`, tự chọn CUDA khi PyTorch hỗ trợ, và ghi kết quả vào bảng `general_triplet`.
+The extractor uses the local checkpoint at `models/checkpoint-40236`, selects CUDA when available, and writes results to `general_triplet`.
 
 ```bash
 python extractor/extract_general_data.py
 ```
 
-Khi cần tạo lại chỉ mục FAISS do thay đổi dữ liệu/model:
+Rebuild the FAISS index after changing the source data or embedding model:
 
 ```bash
 python extractor/extract_general_data.py --rebuild-index
 ```
 
-### 3. Nạp hoặc chọn dữ liệu đã tuyển lọc
+### 3. Load curated data
 
 ```bash
 python script/load_curated_triplet_to_postgres.py
@@ -81,9 +108,9 @@ python script/load_legal_top_quality_to_triplet.py --dry-run
 python script/load_hybrid_rag_qa_train.py
 ```
 
-Tập hybrid chỉ lấy nguồn huấn luyện và chủ động loại dữ liệu benchmark VN-MTEB.
+The hybrid loader uses training splits only and explicitly excludes VN-MTEB benchmark data.
 
-### 4. Xuất dữ liệu để huấn luyện
+### 4. Export the training data
 
 ```bash
 python script/export_clean_triplet_to_sqlite.py \
@@ -93,21 +120,25 @@ python script/export_general_triplet_to_parquet.py \
   --output data/general_triplet.parquet
 ```
 
-Các script xuất kiểm tra schema, tính toàn vẹn và tránh ghi đè mặc định. Dùng `--overwrite` chỉ khi bạn thực sự muốn thay artifact đầu ra.
+The export scripts validate schema and integrity and do not overwrite existing artifacts by default. Use `--overwrite` only when replacement is intentional.
 
-## Schema dữ liệu cốt lõi
+### 5. Fine-tune and evaluate
 
-| Trường | Ý nghĩa |
+Use [`train/final_train.ipynb`](train/final_train.ipynb) to fine-tune on both pair and triplet records, then run [`benchmark/VietEmbed-RAG-V1-VN-MTEB-Benchmark.ipynb`](benchmark/VietEmbed-RAG-V1-VN-MTEB-Benchmark.ipynb) on Kaggle to reproduce the evaluation workflow.
+
+## Core data schema
+
+| Field | Description |
 | --- | --- |
-| `data_id` | Định danh ổn định của bản ghi. |
-| `source`, `title`, `topic`, `domain` | Thông tin nguồn để truy vết và lọc. |
-| `anchor` | Câu truy vấn hoặc văn bản neo. |
-| `positive` | Đoạn phù hợp với `anchor`. |
-| `hard_negative` | Đoạn khó nhưng không phù hợp; có thể rỗng ở nguồn chưa khai thác negative. |
+| `data_id` | Stable record identifier. |
+| `source`, `title`, `topic`, `domain` | Provenance metadata for filtering and auditing. |
+| `anchor` | Query or anchor text. |
+| `positive` | Passage relevant to the anchor. |
+| `hard_negative` | Difficult but irrelevant passage; optional for pair-only sources. |
 
-Với E5, mã hoá truy vấn và đoạn văn theo tiền tố tương ứng `query:` và `passage:`; logic này nằm trong `extractor/extract_general_data.py`.
+E5 inputs must use the corresponding `query:` and `passage:` prefixes. The same convention is applied during training, hard-negative mining, and evaluation.
 
-## Kiểm thử
+## Tests
 
 ```bash
 source ~/miniconda3/etc/profile.d/conda.sh
@@ -115,7 +146,7 @@ conda activate DL_Env
 pytest -q
 ```
 
-## Lưu ý dữ liệu
+## Data safety
 
-- Không commit `.env`, checkpoint, chỉ mục FAISS, cơ sở dữ liệu hoặc artifact dữ liệu lớn.
-- Các thao tác nạp/xuất cần `DATABASE_URL`; đọc kỹ tham số trước khi chạy vì một số script ghi vào PostgreSQL hoặc tạo file đầu ra.
+- Do not commit `.env` files, checkpoints, FAISS indexes, databases, or large generated datasets.
+- PostgreSQL import and export commands require `DATABASE_URL`; review command options before running scripts that write data or create artifacts.
